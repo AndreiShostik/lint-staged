@@ -4,26 +4,8 @@ const chalk = require('chalk')
 const dedent = require('dedent')
 const execa = require('execa')
 const symbols = require('log-symbols')
-const stringArgv = require('string-argv')
 
 const debug = require('debug')('lint-staged:task')
-
-/**
- * Execute the given linter cmd using execa and
- * return the promise.
- *
- * @param {string} cmd
- * @param {Array<string>} args
- * @param {Object} execaOptions
- * @return {Promise} child_process
- */
-const execLinter = (cmd, args, execaOptions) => {
-  debug('cmd:', cmd)
-  if (args) debug('args:', args)
-  debug('execaOptions:', execaOptions)
-
-  return args ? execa(cmd, args, execaOptions) : execa(cmd, execaOptions)
-}
 
 const successMsg = linter => `${symbols.success} ${linter} passed!`
 
@@ -73,8 +55,7 @@ function makeErr(linter, result, context = {}) {
 }
 
 /**
- * Returns the task function for the linter. It handles chunking for file paths
- * if the OS is Windows.
+ * Returns the task function for the linter.
  *
  * @param {Object} options
  * @param {String} [options.gitDir] - Current git repo path
@@ -93,8 +74,10 @@ module.exports = function resolveTaskFn({
   relative,
   shell = false
 }) {
-  const execaOptions = { preferLocal: true, reject: false, shell }
+  const cmd = isFn ? linter : `${linter} ${pathsToLint.join(' ')}`
+  debug('cmd:', cmd)
 
+  const execaOptions = { preferLocal: true, reject: false, shell }
   if (relative) {
     execaOptions.cwd = process.cwd()
   } else if (/^git(\.exe)?/i.test(linter) && gitDir !== process.cwd()) {
@@ -102,27 +85,15 @@ module.exports = function resolveTaskFn({
     // e.g `npm` should run tasks in the actual CWD
     execaOptions.cwd = gitDir
   }
+  debug('execaOptions:', execaOptions)
 
-  let cmd
-  let args
+  return async ctx => {
+    const result = await execa.command(cmd, execaOptions)
 
-  if (shell) {
-    execaOptions.shell = true
-    // If `shell`, passed command shouldn't be parsed
-    // If `linter` is a function, command already includes `pathsToLint`.
-    cmd = isFn ? linter : `${linter} ${pathsToLint.join(' ')}`
-  } else {
-    const [parsedCmd, ...parsedArgs] = stringArgv.parseArgsStringToArgv(linter)
-    cmd = parsedCmd
-    args = isFn ? parsedArgs : parsedArgs.concat(pathsToLint)
+    if (result.failed || result.killed || result.signal != null) {
+      throw makeErr(linter, result, ctx)
+    }
+
+    return successMsg(linter)
   }
-
-  return ctx =>
-    execLinter(cmd, args, execaOptions).then(result => {
-      if (result.failed || result.killed || result.signal != null) {
-        throw makeErr(linter, result, ctx)
-      }
-
-      return successMsg(linter)
-    })
 }
